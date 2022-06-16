@@ -7,7 +7,7 @@ import stashtable
 import workers/utils
 
 
-const maxThrs = 1024
+const maxThrs = 2048
 
 macro initWorkers*(wrks: untyped, dataType: typedesc, cntThrs: int, isThreadsJoin: bool,
          before, inLoop, after: untyped): untyped =
@@ -31,19 +31,27 @@ macro initWorkers*(wrks: untyped, dataType: typedesc, cntThrs: int, isThreadsJoi
     type
       ThreadData = object
         data: Deque[dataType]
+      WorkerInfo = object
+        cntWrkThrs: int
       SharedData = StashTable[string, ThreadData, 10]
       SharedWait = StashTable[string, Deque[string], 10]
+      SharedWorkerInfo = StashTable[string, WorkerInfo, 1]
     
     let shareddataB = newStashTable[string, ThreadData, 10]()
     let sharedWaitB = newStashTable[string, Deque[string], 10]()
+    let sharedWrkInfoB = newStashTable[string, WorkerInfo, 1]()
     shareddataB.insert("prcsData", ThreadData(data: initDeque[dataType]()))
     sharedWaitB.insert("thrInWait", initDeque[string]())
+    sharedWaitB.insert("thrBreak", initDeque[string]())
+    sharedWrkInfoB.insert("wInfo", WorkerInfo())
+    sharedWrkInfoB.withValue("wInfo"):
+      value[].cntWrkThrs = cntThrs
     
     type
       Workers = object
     var wrks = Workers()
     var
-      threads: array[1..maxThrs, Thread[tuple[t: int, shareddata: SharedData, sharedWait: SharedWait]]]
+      threads: array[1..maxThrs, Thread[tuple[t: int, shareddata: SharedData, sharedWait: SharedWait, sharedWrkInfo: SharedWorkerInfo]]]
       cnd: Cond
       cndLocks: array[1..maxThrs, Lock]
     cnd.initCond()
@@ -60,17 +68,36 @@ macro initWorkers*(wrks: untyped, dataType: typedesc, cntThrs: int, isThreadsJoi
         value[].data.addLast(data)
       unblockWaits(sharedWaitB, 0)
 
+    proc clearData(wrks: Workers) =
+      shareddataB.withValue("prcsData"):
+        value[].data.clear()
+      unblockWaits(sharedWaitB, 0)
+    
 
-    proc worker(d: tuple[t: int, shareddata: SharedData, sharedWait: SharedWait]) {.thread.} =
+    proc worker(d: tuple[t: int, shareddata: SharedData, sharedWait: SharedWait, sharedWrkInfo: SharedWorkerInfo]) {.thread.} =
       before
       var
         runThr = true
         needToWait = false
+        prcsData {.inject.}: dataType
       while runThr:
+        d.sharedWait.withValue("thrBreak"):
+          if value[].len != 0:
+            var nSeq = newSeq[string]()
+            while value[].len != 0:
+              let iT = value[].popFirst()
+              if iT == $d.t:
+                runThr = false
+              else:
+                nSeq.add iT
+            value[] = nSeq.toDeque
+        if not runThr:
+          break
+        
         d.shareddata.withValue("prcsData"):
           if value[].data.len != 0:
-            let data = value[].data.popFirst()
-            logLock "data:", $data, "->", d.t, "<"
+            prcsData = value[].data.popFirst()
+            logLock "data:", $prcsData, "->", d.t, "<"
           else:
             needToWait = true
         if needToWait:
@@ -80,16 +107,40 @@ macro initWorkers*(wrks: untyped, dataType: typedesc, cntThrs: int, isThreadsJoi
           wait(cnd, cndLocks[d.t])
           logLock "end wait:", "->", d.t, "<"
           needToWait = false
+          continue
         else:
           unblockWaits(d.sharedWait, d.t)
         #here heavy proccess data from value[].popFirst()
         #sleep rand(50..80)#...
+        logLock "loop body:", "->", d.t, "<"
         body
       after
+      d.sharedWrkInfo.withValue("wInfo"):
+        dec (value[].cntWrkThrs)
     
-    for i in 1..cntThrs:
-      createThread(threads[i], worker, (i, shareddataB, sharedWaitB))
-      cndLocks[i].initLock()
+    proc setThrsCnt(it: Workers, newCnt: int): int =
+      var r: int
+      sharedWrkInfoB.withValue("wInfo"):
+        if newCnt != value[].cntWrkThrs:
+          for i,thr in threads.mpairs:
+            logLock4 "thr.running:", thr.running, ">", i, "<"
+            if newCnt > value[].cntWrkThrs and not thr.running:
+              createThread(threads[i], worker, (i, shareddataB, sharedWaitB, sharedWrkInfoB))
+              cndLocks[i].initLock()
+              inc value[].cntWrkThrs
+            elif newCnt < value[].cntWrkThrs and thr.running:
+              sharedWaitB.withValue("thrBreak"):
+                value[].addLast($i)
+        r = value[].cntWrkThrs
+      unblockWaits(sharedWaitB, 0)
+      r
+
+    sharedWrkInfoB.withValue("wInfo"):
+      for i in 1..value[].cntWrkThrs:
+        createThread(threads[i], worker, (i, shareddataB, sharedWaitB, sharedWrkInfoB))
+        cndLocks[i].initLock()
+    #wrks.setThrsCnt(1)
+    
     if isThreadsJoin:
       joinThreads(threads)
 

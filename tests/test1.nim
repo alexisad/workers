@@ -23,6 +23,7 @@ test "init worker":
       var response: HttpResponseTuple
     ,
     block inLoop:
+      echo "prcsData:", $prcsData
       let
           uriTxt = "https://dns.google/query?name=8.8.8.8"
           #uriTxt = "https://m2414.de"
@@ -39,8 +40,13 @@ test "init worker":
       fResp = nil
   )
 
-
-  initWorkers(wrksB, string, 20, false,
+  type
+      ChFileData = object
+          jobId: string
+          data: seq[byte]
+          partIdx: int
+          currFsegIdx: int
+  initWorkers(wrksB, ChFileData, 20, false,
     block before:
       (sleep rand(50..80))
     ,
@@ -48,6 +54,7 @@ test "init worker":
     block inLoop:
       var y = 0
       #sleep rand(50..80)
+      logLock "wrksB prcsData:", $prcsData
       let x = 0
     ,
     block after:
@@ -58,7 +65,7 @@ test "init worker":
     wrks.sendData(@[$i & "test"])
   when true:
     for i in 1..1_000:
-      wrksB.sendData($i & "test222")
-  sleep 5_000
+      wrksB.sendData ChFileData(jobId: $i & "test222", partIdx: 44, currFsegIdx: 77)
+  sleep 10_000
   #echo "wrksB:", wrksB
   check true
