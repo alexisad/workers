@@ -93,7 +93,7 @@ macro initWorkers*(wrks: untyped, dataType: typedesc, cntThrs: int, isThreadsJoi
             value[] = nSeq.toDeque
         if not runThr:
           break
-        
+
         d.shareddata.withValue("prcsData"):
           if value[].data.len != 0:
             prcsData = value[].data.popFirst()
@@ -123,7 +123,6 @@ macro initWorkers*(wrks: untyped, dataType: typedesc, cntThrs: int, isThreadsJoi
       sharedWrkInfoB.withValue("wInfo"):
         if newCnt != value[].cntWrkThrs:
           for i,thr in threads.mpairs:
-            logLock4 "thr.running:", thr.running, ">", i, "<"
             if newCnt > value[].cntWrkThrs and not thr.running:
               createThread(threads[i], worker, (i, shareddataB, sharedWaitB, sharedWrkInfoB))
               cndLocks[i].initLock()
