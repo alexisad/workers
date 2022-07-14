@@ -134,6 +134,12 @@ macro initWorkers*(wrks: untyped, dataType: typedesc, cntThrs: int, isThreadsJoi
       unblockWaits(sharedWaitB, 0)
       r
 
+    proc getThrsCnt(it: Workers): int =
+      var r: int
+      sharedWrkInfoB.withValue("wInfo"):
+        r = value[].cntWrkThrs
+      r
+
     sharedWrkInfoB.withValue("wInfo"):
       for i in 1..value[].cntWrkThrs:
         createThread(threads[i], worker, (i, shareddataB, sharedWaitB, sharedWrkInfoB))
